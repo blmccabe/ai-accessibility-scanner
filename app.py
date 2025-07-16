@@ -28,7 +28,7 @@ def analyze_accessibility(html_content):
     - Understandable: Headings structure, form labels, error messages.
     - Robust: HTML validity, no deprecated elements.
     
-    Output in JSON: {{"issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion"}}], "score": "0-100 estimate", "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts."}}
+    Respond only with valid JSON in this exact structure: {{"issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion"}}], "score": "0-100 estimate", "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts."}}
     
     HTML: {html_content[:4000]}  # Truncate for token limits
     """
@@ -39,7 +39,8 @@ def analyze_accessibility(html_content):
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1000,
-            temperature=0.5
+            temperature=0.5,
+            response_format={"type": "json_object"}  # Forces JSON output
         )
         result_text = response.choices[0].message.content.strip()
         import json
@@ -65,7 +66,7 @@ if st.button("Scan Site"):
                 st.subheader(f"Accessibility Score: {results.get('score', 'N/A')}")
                 st.info(results["disclaimer"])
                 
-                for issue in results.get("issues", []):
+                for issue in results.get('issues', []):
                     st.markdown(f"**{issue['criterion']} ({issue['severity']})**: {issue['description']}")
                     st.write(f"Fix: {issue['fix']}")
 
