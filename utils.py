@@ -1,4 +1,5 @@
 import os
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import openai
@@ -7,6 +8,7 @@ import stripe
 from fpdf import FPDF
 import csv
 import io
+import pandas as pd  # For Excel
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -42,7 +44,7 @@ def fetch_html(url):
         return f"Error fetching URL: {str(e)}"
 
 def analyze_accessibility(html_content):
-    """Use AI to scan HTML for WCAG issues."""
+    """Use AI to scan HTML for WCAG issues with code fixes."""
     prompt = f"""
     Analyze this HTML for WCAG 2.1/2.2 accessibility issues. Focus on:
     - Perceivable: Missing alt text on images, color contrast (estimate if possible), text alternatives.
@@ -50,7 +52,7 @@ def analyze_accessibility(html_content):
     - Understandable: Headings structure, form labels, error messages.
     - Robust: HTML validity, no deprecated elements.
     
-    Respond only with valid JSON in this exact structure: {{"issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion"}}], "score": "0-100 estimate", "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.", "summary": "Brief AI summary of key issues for Pro users."}}
+    Respond only with valid JSON in this exact structure: {{"issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion", "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"}}], "score": "0-100 estimate", "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.", "summary": "Brief AI summary of key issues for Pro users."}}
     
     HTML: {html_content[:4000]}
     """
@@ -58,7 +60,7 @@ def analyze_accessibility(html_content):
     try:
         client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1000,
             temperature=0.5,
@@ -78,12 +80,20 @@ def export_to_pdf(results):
     for issue in results.get('issues', []):
         pdf.cell(200, 10, txt=f"{issue['criterion']} ({issue['severity']}): {issue['description']}", ln=1)
         pdf.cell(200, 10, txt=f"Fix: {issue['fix']}", ln=1)
+        pdf.cell(200, 10, txt=f"Code Fix: {issue['code_fix']}", ln=1)
     return pdf.output(dest='S').encode('latin1')
 
 def export_to_csv(results):
     csv_output = io.StringIO()
     writer = csv.writer(csv_output)
-    writer.writerow(['Criterion', 'Severity', 'Description', 'Fix'])
+    writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix'])
     for issue in results.get('issues', []):
-        writer.writerow([issue['criterion'], issue['severity'], issue['description'], issue['fix']])
+        writer.writerow([issue['criterion'], issue['severity'], issue['description'], issue['fix'], issue['code_fix']])
     return csv_output.getvalue()
+
+def export_to_excel(results):
+    df = pd.DataFrame(results.get('issues', []))
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Scan Report')
+    return output.getvalue()

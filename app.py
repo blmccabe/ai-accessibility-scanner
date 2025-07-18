@@ -1,6 +1,6 @@
 import streamlit as st
-import os  # Added this line
-from utils import get_user_tier, fetch_html, analyze_accessibility, export_to_pdf, export_to_csv
+import os
+from utils import get_user_tier, fetch_html, analyze_accessibility, export_to_pdf, export_to_csv, export_to_excel
 import stripe
 
 # User session
@@ -10,6 +10,8 @@ if 'tier' not in st.session_state:
     st.session_state.tier = 'Free'
 if 'scan_count' not in st.session_state:
     st.session_state.scan_count = 0
+if 'results' not in st.session_state:
+    st.session_state.results = None
 
 # UI
 st.title("AI Accessibility Scanner: WCAG Compliance for Small Sites")
@@ -25,8 +27,9 @@ if email:
         st.session_state.user_email = None
         st.session_state.tier = 'Free'
 
+# Always show upgrade options in sidebar with tooltips
 st.sidebar.title("Upgrade Options")
-if st.sidebar.button("Upgrade to Pro ($9/mo)"):
+if st.sidebar.button("Upgrade to Pro ($9/mo)", help="Unlimited scans + AI summary + exports"):
     if not st.session_state.user_email:
         st.sidebar.error("Enter a valid email in the main area first!")
     else:
@@ -49,7 +52,7 @@ if st.sidebar.button("Upgrade to Pro ($9/mo)"):
         except Exception as e:
             st.sidebar.error(f"Error starting payment: {str(e)}. Check if STRIPE_PRO_PRICE_ID, STRIPE_SECRET_KEY, and DOMAIN are set in .env.")
 
-if st.sidebar.button("Upgrade to Agency ($49/mo)"):
+if st.sidebar.button("Upgrade to Agency ($49/mo)", help="Multi-domain + white-label + team features"):
     if not st.session_state.user_email:
         st.sidebar.error("Enter a valid email in the main area first!")
     else:
@@ -76,6 +79,34 @@ if st.session_state.tier == 'Free':
     st.warning("1 scan/day. Upgrade for more.")
     if st.session_state.scan_count >= 1:
         st.error("Free limit reached. Upgrade in sidebar!")
+        # Show previous results if any
+        if st.session_state.results:
+            results = st.session_state.results
+            st.subheader(f"Score: {results.get('score', 'N/A')}")
+            st.info(results["disclaimer"])
+
+            if st.session_state.tier != 'Free':
+                st.subheader("AI Summary")
+                st.write(results.get('summary', 'No summary available.'))
+
+            for issue in results.get('issues', []):
+                st.markdown(f"**{issue['criterion']} ({issue['severity']})**: {issue['description']}")
+                st.write(f"Fix: {issue['fix']}")
+                if st.session_state.tier in ['Pro', 'Agency']:
+                    st.write("Code Fix:")
+                    st.code(issue.get('code_fix', 'N/A'), language='html')
+
+            if st.session_state.tier in ['Pro', 'Agency']:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    pdf_output = export_to_pdf(results)
+                    st.download_button("Download PDF", pdf_output, file_name="scan_report.pdf", mime="application/pdf", key="pdf_download")
+                with col2:
+                    csv_value = export_to_csv(results)
+                    st.download_button("Download CSV", csv_value, file_name="scan_report.csv", mime="text/csv", key="csv_download")
+                with col3:
+                    excel_value = export_to_excel(results)
+                    st.download_button("Download Excel", excel_value, file_name="scan_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="excel_download")
         st.stop()
 
 url = st.text_input("Website URL (e.g., https://example.com)")
@@ -87,6 +118,7 @@ if st.button("Scan Site") and st.session_state.user_email:
             st.error(html)
         else:
             results = analyze_accessibility(html)
+            st.session_state.results = results
             if "error" in results:
                 st.error(results["error"])
             else:
@@ -100,14 +132,20 @@ if st.button("Scan Site") and st.session_state.user_email:
                 for issue in results.get('issues', []):
                     st.markdown(f"**{issue['criterion']} ({issue['severity']})**: {issue['description']}")
                     st.write(f"Fix: {issue['fix']}")
+                    if st.session_state.tier in ['Pro', 'Agency']:
+                        st.write("Code Fix:")
+                        st.code(issue.get('code_fix', 'N/A'), language='html')
 
                 if st.session_state.tier in ['Pro', 'Agency']:
-                    if st.button("Export to PDF"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
                         pdf_output = export_to_pdf(results)
-                        st.download_button("Download PDF", pdf_output, file_name="scan_report.pdf", mime="application/pdf")
-
-                    if st.button("Export to CSV"):
+                        st.download_button("Download PDF", pdf_output, file_name="scan_report.pdf", mime="application/pdf", key="pdf_download")
+                    with col2:
                         csv_value = export_to_csv(results)
-                        st.download_button("Download CSV", csv_value, file_name="scan_report.csv", mime="text/csv")
+                        st.download_button("Download CSV", csv_value, file_name="scan_report.csv", mime="text/csv", key="csv_download")
+                    with col3:
+                        excel_value = export_to_excel(results)
+                        st.download_button("Download Excel", excel_value, file_name="scan_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="excel_download")
 
-st.caption("Free: 1 scan/day. Pro: Unlimited + exports. Agency: Multi-domain + white-label. Enterprise: Custom.")
+st.caption("Free: 1 scan/day. Pro: Unlimited + exports + code fixes. Agency: Multi-domain + white-label. Enterprise: Custom.")
