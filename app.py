@@ -3,12 +3,12 @@ import os
 from utils import get_user_tier, fetch_html, analyze_accessibility, export_to_pdf, export_to_csv, export_to_excel
 import stripe
 
-# Custom CSS for design (consistent buttons, colors, responsiveness)
+# Custom CSS for design
 st.markdown("""
     <style>
     .stButton > button {
-        width: 100%;  # Consistent size
-        background-color: #007bff;  # Blue theme
+        width: 100%;
+        background-color: #007bff;
         color: white;
         border-radius: 5px;
     }
@@ -16,15 +16,15 @@ st.markdown("""
         background-color: #0056b3;
     }
     .stTextInput > div > div > input {
-        background-color: #f8f9fa;  # Light input
+        background-color: #f8f9fa;
     }
     .reportview-container {
-        background-color: #ffffff;  # Light mode
+        background-color: #ffffff;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# User session
+# Session state defaults
 if 'user_email' not in st.session_state:
     st.session_state.user_email = None
 if 'tier' not in st.session_state:
@@ -35,6 +35,65 @@ if 'results' not in st.session_state:
     st.session_state.results = None
 if 'dark_mode' not in st.session_state:
     st.session_state.dark_mode = False
+
+# Dark mode toggle
+if st.sidebar.checkbox("Dark Mode", value=st.session_state.dark_mode, help="Switch to dark theme for better contrast in low light."):
+    st.session_state.dark_mode = True
+    st.markdown("""
+        <style>
+        .reportview-container {
+            background-color: #121212;
+            color: #ffffff;
+        }
+        .stTextInput > div > div > input {
+            background-color: #2c2c2c;
+            color: #ffffff;
+        }
+        .stButton > button {
+            background-color: #0056b3;
+        }
+        .stMarkdown, .stInfo, .stError, .stWarning {
+            color: #f0f0f0;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+else:
+    st.session_state.dark_mode = False
+
+# Logo and intro
+with st.container():
+    st.image("assets/logo.png", width=80)
+
+st.title("NexAssistAI: AI Accessibility Scanner")
+st.markdown("### Scan your site for accessibility issues in seconds.")
+st.markdown("_Start by entering your work email and website URL below._")
+
+# Prefill email from URL query
+query_params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+prefill_email = query_params.get("email", [None])[0]
+if prefill_email and not st.session_state.get("user_email"):
+    if '@' in prefill_email and '.' in prefill_email[prefill_email.index('@'):]:
+        st.session_state.user_email = prefill_email
+        st.session_state.tier = get_user_tier(prefill_email)
+
+email = st.text_input("Work Email", placeholder="you@company.com")
+if email:
+    if '@' in email and '.' in email[email.index('@'):] and len(email) >= 10:
+        st.session_state.user_email = email
+        st.session_state.tier = get_user_tier(email)
+        st.info(f"Your tier: {st.session_state.tier}")
+    else:
+        st.error("Invalid email format. Use e.g., name@example.com (at least 10 characters).")
+        st.session_state.user_email = None
+        st.session_state.tier = 'Free'
+
+st.markdown("""
+Welcome! This tool scans any website for accessibility issues using WCAG 2.1/2.2 standards.  
+Start by entering a URL — Free users get 1 scan/day. Upgrade for more.
+""")
+
+# Upgrade sidebar
+st.sidebar.title("Upgrade Options")
 
 def create_checkout_button(label, price_env_var):
     if st.sidebar.button(label):
@@ -51,62 +110,32 @@ def create_checkout_button(label, price_env_var):
                 customer_email=st.session_state.user_email
             )
             st.sidebar.success("Redirecting to payment...")
-            st.markdown(f"""
-                <script>window.location.href = '{session.url}';</script>
-                """, unsafe_allow_html=True)
+            st.markdown(f"<script>window.location.href = '{session.url}';</script>", unsafe_allow_html=True)
             st.markdown(f"[Click if not redirected]({session.url})", unsafe_allow_html=True)
         except Exception as e:
             st.sidebar.error(f"Error starting payment: {str(e)}")
 
-# Dark mode toggle and CSS (conditional for fix)
-if st.sidebar.checkbox("Dark Mode", value=st.session_state.dark_mode, help="Switch to dark theme for better contrast in low light."):
-    st.session_state.dark_mode = True
-    st.markdown("""
-        <style>
-        .reportview-container {
-            background-color: #121212;  # Dark background
-            color: #ffffff;  # White text for 17:1 contrast
-        }
-        .stTextInput > div > div > input {
-            background-color: #2c2c2c;  # Dark input
-            color: #ffffff;
-        }
-        .stButton > button {
-            background-color: #0056b3;  # Darker blue
-        }
-        .stMarkdown, .stInfo, .stError, .stWarning {
-            color: #f0f0f0;  # High contrast text
-        }
-        </style>
-        """, unsafe_allow_html=True)
-else:
-    st.session_state.dark_mode = False
-
-# UI
-st.image("assets/logo.png", width=150)
-st.title("NexAssistAI: AI Accessibility Scanner")
-
-email = st.text_input("Email to login/check tier", help="Enter your email to check or sign up for a tier (required for scans).")
-if email:
-    if '@' in email and '.' in email[email.index('@'):] and len(email) >= 10:
-        st.session_state.user_email = email
-        st.session_state.tier = get_user_tier(email)
-        st.info(f"Your tier: {st.session_state.tier}")
-    else:
-        st.error("Invalid email format. Use e.g., name@example.com (at least 10 characters).")
-        st.session_state.user_email = None
-        st.session_state.tier = 'Free'
-
-st.sidebar.title("Upgrade Options")
-
 create_checkout_button("Upgrade to Pro ($9/mo)", "STRIPE_PRO_PRICE_ID")
 create_checkout_button("Upgrade to Agency ($49/mo)", "STRIPE_AGENCY_PRICE_ID")
 
-if st.session_state.tier == 'Free':
-    st.warning("1 scan/day. Upgrade for more.")
-    if st.session_state.scan_count >= 1:
+# Scan logic
+url = st.text_input("Website URL (e.g., https://example.com)", help="Enter a website URL to scan for accessibility issues.")
+
+if st.button("Scan Site") and st.session_state.user_email:
+    with st.expander("📘 First time using this? Click here for help."):
+        st.markdown("""
+        **How it works:**
+
+        1. Enter your **work email** to check your tier.
+        2. Paste a **website URL** and click **Scan Site**.
+        3. See **AI-powered accessibility issues**, potential fixes, and a score.
+        4. Download reports in PDF, CSV, Excel (Pro/Agency only).
+
+        ⚠️ **Free users** get 1 scan/day — upgrade in the sidebar to unlock full access.
+        """)
+
+    if st.session_state.tier == 'Free' and st.session_state.scan_count >= 1:
         st.error("Free limit reached. Upgrade in sidebar!")
-        # Show previous results if any
         if st.session_state.results:
             results = st.session_state.results
             st.subheader(f"Score: {results.get('score', 'N/A')}")
@@ -126,19 +155,15 @@ if st.session_state.tier == 'Free':
             if st.session_state.tier in ['Pro', 'Agency']:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    pdf_output = export_to_pdf(results)
-                    st.download_button("Download PDF", pdf_output, file_name="scan_report.pdf", mime="application/pdf", key="pdf_download")
+                    st.download_button("Download PDF", export_to_pdf(results), file_name="scan_report.pdf", mime="application/pdf")
                 with col2:
-                    csv_value = export_to_csv(results)
-                    st.download_button("Download CSV", csv_value, file_name="scan_report.csv", mime="text/csv", key="csv_download")
+                    st.download_button("Download CSV", export_to_csv(results), file_name="scan_report.csv", mime="text/csv")
                 with col3:
-                    excel_value = export_to_excel(results)
-                    st.download_button("Download Excel", excel_value, file_name="scan_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="excel_download")
+                    st.download_button("Download Excel", export_to_excel(results), file_name="scan_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         st.stop()
 
-url = st.text_input("Website URL (e.g., https://example.com)", help="Enter a website URL to scan for accessibility issues.")
-if st.button("Scan Site") and st.session_state.user_email:
     st.session_state.scan_count += 1 if st.session_state.tier == 'Free' else 0
+
     with st.spinner("Scanning..."):
         html = fetch_html(url)
         if "Error" in html:
@@ -166,13 +191,10 @@ if st.button("Scan Site") and st.session_state.user_email:
                 if st.session_state.tier in ['Pro', 'Agency']:
                     col1, col2, col3 = st.columns(3)
                     with col1:
-                        pdf_output = export_to_pdf(results)
-                        st.download_button("Download PDF", pdf_output, file_name="scan_report.pdf", mime="application/pdf", key="pdf_download")
+                        st.download_button("Download PDF", export_to_pdf(results), file_name="scan_report.pdf", mime="application/pdf")
                     with col2:
-                        csv_value = export_to_csv(results)
-                        st.download_button("Download CSV", csv_value, file_name="scan_report.csv", mime="text/csv", key="csv_download")
+                        st.download_button("Download CSV", export_to_csv(results), file_name="scan_report.csv", mime="text/csv")
                     with col3:
-                        excel_value = export_to_excel(results)
-                        st.download_button("Download Excel", excel_value, file_name="scan_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="excel_download")
+                        st.download_button("Download Excel", export_to_excel(results), file_name="scan_report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 st.caption("Free: 1 scan/day. Pro: Unlimited + exports + code fixes. Agency: Multi-domain + white-label. Enterprise: Custom.")
