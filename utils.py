@@ -6,19 +6,19 @@ import openai
 from dotenv import load_dotenv
 import stripe
 from fpdf import FPDF
+from datetime import datetime
 import csv
 import io
 import pandas as pd  # For Excel
-from io import BytesIO, StringIO
-from datetime import datetime
-import json
+from io import BytesIO
 
+# Load environment variables
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 def get_user_tier(email):
-    """Check Stripe subscription tier."""
+    """Check Stripe sub tier."""
     try:
         customers = stripe.Customer.search(query=f'email:"{email}"')
         if customers.data:
@@ -32,7 +32,7 @@ def get_user_tier(email):
                         return 'Pro'
                     elif price_id == os.getenv("STRIPE_AGENCY_PRICE_ID"):
                         return 'Agency'
-                    return 'Unknown'  # Plan doesn't match Pro or Agency
+                    return 'Unknown'
         return 'Free'
     except Exception:
         return 'Free'
@@ -59,7 +59,15 @@ def analyze_accessibility(html_content):
     - Robust: HTML validity, no deprecated elements.
 
     Respond only with valid JSON in this exact structure: {{
-      "issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion", "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"}}],
+      "issues": [
+        {{
+          "criterion": "WCAG ref",
+          "description": "Issue detail",
+          "severity": "Low/Med/High",
+          "fix": "Suggestion",
+          "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"
+        }}
+      ],
       "score": "0-100 estimate",
       "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
       "summary": "Brief AI summary of key issues for Pro users."
@@ -77,6 +85,7 @@ def analyze_accessibility(html_content):
             response_format={"type": "json_object"}
         )
         result_text = response.choices[0].message.content.strip()
+        import json
         try:
             return json.loads(result_text)
         except Exception:
@@ -100,25 +109,16 @@ def export_to_pdf(results):
         pdf.multi_cell(0, 10, txt=f"Code Fix: {issue['code_fix']}")
         pdf.ln(2)
 
-    buffer = BytesIO()
-    pdf.output(buffer)
-    buffer.seek(0)
-    return buffer
+    pdf_bytes = pdf.output(dest='S').encode('latin1')
+    return BytesIO(pdf_bytes)
 
 def export_to_csv(results):
-    output = StringIO()
-    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    csv_output = io.StringIO()
+    writer = csv.writer(csv_output, quoting=csv.QUOTE_ALL)
     writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix'])
     for issue in results.get('issues', []):
-        writer.writerow([
-            issue.get('criterion', ''),
-            issue.get('severity', ''),
-            issue.get('description', ''),
-            issue.get('fix', ''),
-            issue.get('code_fix', '')
-        ])
-    output.seek(0)
-    return output
+        writer.writerow([issue['criterion'], issue['severity'], issue['description'], issue['fix'], issue['code_fix']])
+    return BytesIO(csv_output.getvalue().encode("utf-8"))
 
 def export_to_excel(results):
     df = pd.DataFrame(results.get('issues', []))
@@ -127,4 +127,3 @@ def export_to_excel(results):
         df.to_excel(writer, index=False, sheet_name='Scan Report')
     output.seek(0)
     return output
-
