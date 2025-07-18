@@ -25,7 +25,8 @@ if "session_id" in query_params:
             st.experimental_rerun()  # Refresh to show new tier
     except Exception as e:
         st.error(f"Error verifying payment: {str(e)}")
-
+# Branding with logo
+st.image("assets/logo.png", width=100)  # Adjust width if needed
 # UI
 st.title("AI Accessibility Scanner: WCAG Compliance for Small Sites")
 
