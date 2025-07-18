@@ -34,7 +34,9 @@ def get_user_tier(email):
         return 'Free'
 
 def fetch_html(url):
-    """Fetch and parse HTML from URL."""
+    """Fetch and parse HTML from URL, add scheme if missing."""
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url  # Add https if missing
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()

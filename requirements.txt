@@ -6,3 +6,4 @@ python-dotenv
 stripe
 fpdf
 pandas
+xlsxwriter

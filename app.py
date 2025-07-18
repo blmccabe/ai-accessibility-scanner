@@ -13,6 +13,19 @@ if 'scan_count' not in st.session_state:
 if 'results' not in st.session_state:
     st.session_state.results = None
 
+# Check for Stripe checkout success (redirect back)
+query_params = st.query_params  # Updated to new function
+if "session_id" in query_params:
+    session_id = query_params["session_id"][0]
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.payment_status == 'paid':
+            st.success("Payment successful! Your tier has been updated.")
+            st.session_state.tier = get_user_tier(st.session_state.user_email)
+            st.experimental_rerun()  # Refresh to show new tier
+    except Exception as e:
+        st.error(f"Error verifying payment: {str(e)}")
+
 # UI
 st.title("AI Accessibility Scanner: WCAG Compliance for Small Sites")
 
@@ -27,9 +40,8 @@ if email:
         st.session_state.user_email = None
         st.session_state.tier = 'Free'
 
-# Always show upgrade options in sidebar with tooltips
 st.sidebar.title("Upgrade Options")
-if st.sidebar.button("Upgrade to Pro ($9/mo)", help="Unlimited scans + AI summary + exports"):
+if st.sidebar.button("Upgrade to Pro ($9/mo)"):
     if not st.session_state.user_email:
         st.sidebar.error("Enter a valid email in the main area first!")
     else:
@@ -52,7 +64,7 @@ if st.sidebar.button("Upgrade to Pro ($9/mo)", help="Unlimited scans + AI summar
         except Exception as e:
             st.sidebar.error(f"Error starting payment: {str(e)}. Check if STRIPE_PRO_PRICE_ID, STRIPE_SECRET_KEY, and DOMAIN are set in .env.")
 
-if st.sidebar.button("Upgrade to Agency ($49/mo)", help="Multi-domain + white-label + team features"):
+if st.sidebar.button("Upgrade to Agency ($49/mo)"):
     if not st.session_state.user_email:
         st.sidebar.error("Enter a valid email in the main area first!")
     else:
