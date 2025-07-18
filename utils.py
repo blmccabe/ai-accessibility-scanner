@@ -9,13 +9,16 @@ from fpdf import FPDF
 import csv
 import io
 import pandas as pd  # For Excel
+from io import BytesIO, StringIO
+from datetime import datetime
+import json
 
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 def get_user_tier(email):
-    """Check Stripe sub tier."""
+    """Check Stripe subscription tier."""
     try:
         customers = stripe.Customer.search(query=f'email:"{email}"')
         if customers.data:
@@ -31,13 +34,13 @@ def get_user_tier(email):
                         return 'Agency'
                     return 'Unknown'  # Plan doesn't match Pro or Agency
         return 'Free'
-    except Exception as e:
+    except Exception:
         return 'Free'
 
 def fetch_html(url):
     """Fetch and parse HTML from URL, add scheme if missing."""
     if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url  # Add https if missing
+        url = 'https://' + url
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -54,9 +57,14 @@ def analyze_accessibility(html_content):
     - Operable: Keyboard navigation traps, ARIA roles/labels for interactive elements.
     - Understandable: Headings structure, form labels, error messages.
     - Robust: HTML validity, no deprecated elements.
-    
-    Respond only with valid JSON in this exact structure: {{"issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion", "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"}}], "score": "0-100 estimate", "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.", "summary": "Brief AI summary of key issues for Pro users."}}
-    
+
+    Respond only with valid JSON in this exact structure: {{
+      "issues": [{{"criterion": "WCAG ref", "description": "Issue detail", "severity": "Low/Med/High", "fix": "Suggestion", "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"}}],
+      "score": "0-100 estimate",
+      "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
+      "summary": "Brief AI summary of key issues for Pro users."
+    }}
+
     HTML: {html_content[:4000]}
     """
     try:
@@ -69,7 +77,6 @@ def analyze_accessibility(html_content):
             response_format={"type": "json_object"}
         )
         result_text = response.choices[0].message.content.strip()
-        import json
         try:
             return json.loads(result_text)
         except Exception:
@@ -86,25 +93,38 @@ def export_to_pdf(results):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"Score: {results.get('score', 'N/A')}", ln=1)
-    from datetime import datetime
     pdf.cell(200, 10, txt=f"Scan Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=1)
     for issue in results.get('issues', []):
-        pdf.cell(200, 10, txt=f"{issue['criterion']} ({issue['severity']}): {issue['description']}", ln=1)
-        pdf.cell(200, 10, txt=f"Fix: {issue['fix']}", ln=1)
-        pdf.cell(200, 10, txt=f"Code Fix: {issue['code_fix']}", ln=1)
-    return pdf.output(dest='S').encode('latin1')
+        pdf.multi_cell(0, 10, txt=f"{issue['criterion']} ({issue['severity']}): {issue['description']}")
+        pdf.multi_cell(0, 10, txt=f"Fix: {issue['fix']}")
+        pdf.multi_cell(0, 10, txt=f"Code Fix: {issue['code_fix']}")
+        pdf.ln(2)
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    buffer.seek(0)
+    return buffer
 
 def export_to_csv(results):
-    csv_output = io.StringIO()
-    writer = csv.writer(csv_output, quoting=csv.QUOTE_ALL)
+    output = StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
     writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix'])
     for issue in results.get('issues', []):
-        writer.writerow([issue['criterion'], issue['severity'], issue['description'], issue['fix'], issue['code_fix']])
-    return csv_output.getvalue()
+        writer.writerow([
+            issue.get('criterion', ''),
+            issue.get('severity', ''),
+            issue.get('description', ''),
+            issue.get('fix', ''),
+            issue.get('code_fix', '')
+        ])
+    output.seek(0)
+    return output
 
 def export_to_excel(results):
     df = pd.DataFrame(results.get('issues', []))
-    output = io.BytesIO()
+    output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Scan Report')
-    return output.getvalue()
+    output.seek(0)
+    return output
+
