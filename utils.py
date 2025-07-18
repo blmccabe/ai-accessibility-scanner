@@ -29,6 +29,7 @@ def get_user_tier(email):
                         return 'Pro'
                     elif price_id == os.getenv("STRIPE_AGENCY_PRICE_ID"):
                         return 'Agency'
+                    return 'Unknown'  # Plan doesn't match Pro or Agency
         return 'Free'
     except Exception as e:
         return 'Free'
@@ -58,7 +59,6 @@ def analyze_accessibility(html_content):
     
     HTML: {html_content[:4000]}
     """
-
     try:
         client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         response = client.chat.completions.create(
@@ -70,7 +70,14 @@ def analyze_accessibility(html_content):
         )
         result_text = response.choices[0].message.content.strip()
         import json
-        return json.loads(result_text)
+        try:
+            return json.loads(result_text)
+        except Exception:
+            return {
+                "error": "AI response could not be parsed. Try again.",
+                "raw": result_text,
+                "disclaimer": "Analysis failed. This may be due to malformed AI output."
+            }
     except Exception as e:
         return {"error": str(e), "disclaimer": "Analysis failed."}
 
@@ -79,6 +86,8 @@ def export_to_pdf(results):
     pdf.add_page()
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"Score: {results.get('score', 'N/A')}", ln=1)
+    from datetime import datetime
+    pdf.cell(200, 10, txt=f"Scan Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=1)
     for issue in results.get('issues', []):
         pdf.cell(200, 10, txt=f"{issue['criterion']} ({issue['severity']}): {issue['description']}", ln=1)
         pdf.cell(200, 10, txt=f"Fix: {issue['fix']}", ln=1)
@@ -87,7 +96,7 @@ def export_to_pdf(results):
 
 def export_to_csv(results):
     csv_output = io.StringIO()
-    writer = csv.writer(csv_output)
+    writer = csv.writer(csv_output, quoting=csv.QUOTE_ALL)
     writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix'])
     for issue in results.get('issues', []):
         writer.writerow([issue['criterion'], issue['severity'], issue['description'], issue['fix'], issue['code_fix']])
