@@ -37,17 +37,23 @@ def get_user_tier(email):
     except Exception:
         return 'Free'
 
+from playwright.sync_api import sync_playwright
+
 def fetch_html(url):
-    """Fetch and parse HTML from URL, add scheme if missing."""
+    """Fetch full HTML including JS-rendered content using Playwright."""
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        return str(soup)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, timeout=15000)
+            page.wait_for_timeout(3000)  # wait 3 seconds for JS to load
+            content = page.content()
+            browser.close()
+            return content
     except Exception as e:
-        return f"Error fetching URL: {str(e)}"
+        return f"Error fetching URL with Playwright: {str(e)}"
 
 def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with code fixes."""
