@@ -47,7 +47,7 @@ def fetch_html(url):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(url, timeout=15000)
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(3000)  # wait 3 seconds for JS to load
             content = page.content()
             browser.close()
