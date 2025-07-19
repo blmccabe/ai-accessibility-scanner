@@ -40,20 +40,18 @@ def get_user_tier(email):
 from playwright.sync_api import sync_playwright
 
 def fetch_html(url):
-    """Fetch full HTML including JS-rendered content using Playwright."""
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
+    from playwright.sync_api import sync_playwright
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(3000)  # wait 3 seconds for JS to load
-            content = page.content()
+            html = page.content()
             browser.close()
-            return content
+            return html
     except Exception as e:
-        return f"Error fetching URL with Playwright: {str(e)}"
+        return f"Error fetching URL with Playwright: {e}"
+
 
 def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with code fixes."""
