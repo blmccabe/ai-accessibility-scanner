@@ -7,3 +7,4 @@ stripe
 fpdf
 pandas
 xlsxwriter
+playwright
