@@ -86,33 +86,34 @@ def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with code fixes."""
     from openai import OpenAI
     import json
+    import re
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     prompt = f"""
-    Analyze this HTML for WCAG 2.1/2.2 accessibility issues. Focus on:
-    - Perceivable: Missing alt text on images, color contrast (estimate if possible), text alternatives.
-    - Operable: Keyboard navigation traps, ARIA roles/labels for interactive elements.
-    - Understandable: Headings structure, form labels, error messages.
-    - Robust: HTML validity, no deprecated elements.
+Analyze this HTML for WCAG 2.1/2.2 accessibility issues. Focus on:
+- Perceivable: Missing alt text on images, color contrast (estimate if possible), text alternatives.
+- Operable: Keyboard navigation traps, ARIA roles/labels for interactive elements.
+- Understandable: Headings structure, form labels, error messages.
+- Robust: HTML validity, no deprecated elements.
 
-    Respond only with valid JSON in this exact structure: {{
-      "issues": [
-        {{
-          "criterion": "WCAG ref",
-          "description": "Issue detail",
-          "severity": "Low/Med/High",
-          "fix": "Suggestion",
-          "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"
-        }}
-      ],
-      "score": "0-100 estimate",
-      "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
-      "summary": "Brief AI summary of key issues for Pro users."
+Respond only with valid JSON in this exact structure: {{
+  "issues": [
+    {{
+      "criterion": "WCAG ref",
+      "description": "Issue detail",
+      "severity": "Low/Med/High",
+      "fix": "Suggestion",
+      "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"
     }}
+  ],
+  "score": "0-100 estimate",
+  "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
+  "summary": "Brief AI summary of key issues for Pro users."
+}}
 
-    HTML: {html_content[:4000]}
-    """
+HTML: {html_content[:3000].replace('{', '').replace('}', '').replace('\n', ' ').replace('\r', '').replace('"', "'")}
+"""
 
     try:
         response = client.chat.completions.create(
@@ -126,14 +127,22 @@ def analyze_accessibility(html_content):
         try:
             return json.loads(result_text)
         except Exception:
-            return {
-                "error": "AI response could not be parsed. Try again.",
-                "raw": result_text,
-                "disclaimer": "Analysis failed. This may be due to malformed AI output."
-            }
+            try:
+                match = re.search(r'\{.*\}', result_text, re.DOTALL)
+                if match:
+                    return json.loads(match.group(0))
+                else:
+                    raise ValueError("No JSON object found in response.")
+            except Exception as inner_error:
+                return {
+                    "error": "AI response could not be parsed. Try again.",
+                    "raw": result_text,
+                    "disclaimer": f"Parsing failed. Reason: {inner_error}"
+                }
 
     except Exception as e:
         return {"error": str(e), "disclaimer": "Analysis failed."}
+
 
 def export_to_pdf(results):
     pdf = FPDF()
