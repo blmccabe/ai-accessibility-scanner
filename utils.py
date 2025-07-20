@@ -1,5 +1,4 @@
 import os
-import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import openai
@@ -13,6 +12,13 @@ import pandas as pd
 from io import BytesIO
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
+import logging
+import json
+import re
+import html
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 
 # Load environment variables
 load_dotenv()
@@ -37,7 +43,7 @@ def get_user_tier(email):
                     return 'Unknown'
         return 'Free'
     except Exception as e:
-        print(f"[Stripe Error] {e}")
+        logging.error(f"[Stripe Error] {e}")
         return 'Free'
 
 def normalize_url(url):
@@ -53,42 +59,46 @@ def block_heavy_resources(route):
         route.continue_()
 
 def fetch_page_content(target_url):
+    target_url = normalize_url(target_url)
     try:
-        target_url = normalize_url(target_url)
-
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context()
             context.route("**/*", block_heavy_resources)
             page = context.new_page()
-
             page.goto(target_url, timeout=30000, wait_until='domcontentloaded')
             content = page.content()
-
             context.close()
             browser.close()
-
             return {
                 "success": True,
                 "html": content
             }
-
     except Exception as e:
-        print("Error fetching with Playwright:", str(e))
-        return {
-            "success": False,
-            "error": f"Error fetching URL with Playwright: {str(e)}",
-            "score": 0,
-            "summary": "This site could not be scanned due to a loading issue. Double-check the URL or try a different one."
-        }
+        logging.warning(f"[Playwright error] {e}")
+        try:
+            response = requests.get(target_url, timeout=10)
+            response.raise_for_status()
+            return {
+                "success": True,
+                "html": response.text
+            }
+        except Exception as fallback_e:
+            logging.error(f"[Requests fallback error] {fallback_e}")
+            return {
+                "success": False,
+                "error": f"Error fetching URL: {str(fallback_e)}",
+                "score": 0,
+                "summary": "This site could not be scanned due to a loading issue. Double-check the URL or try a different one."
+            }
 
 def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with code fixes."""
     from openai import OpenAI
-    import json
-    import re
-
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    safe_html_snippet = html_content[:3000]
+    safe_html_snippet = html.escape(safe_html_snippet).replace('{', '').replace('}', '').replace('"', "'").replace('\\', '')
 
     prompt = f"""
 Analyze this HTML for WCAG 2.1/2.2 accessibility issues. Focus on:
@@ -112,37 +122,32 @@ Respond only with valid JSON in this exact structure: {{
   "summary": "Brief AI summary of key issues for Pro users."
 }}
 
-HTML: {html_content[:3000].replace('{', '').replace('}', '').replace('\n', ' ').replace('\r', '').replace('"', "'")}
+HTML: {safe_html_snippet}
 """
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.5,
+            temperature=0.3,
             max_tokens=1000
         )
         result_text = response.choices[0].message.content.strip()
-
         try:
             return json.loads(result_text)
         except Exception:
-            try:
-                match = re.search(r'\{.*\}', result_text, re.DOTALL)
-                if match:
-                    return json.loads(match.group(0))
-                else:
-                    raise ValueError("No JSON object found in response.")
-            except Exception as inner_error:
-                return {
-                    "error": "AI response could not be parsed. Try again.",
-                    "raw": result_text,
-                    "disclaimer": f"Parsing failed. Reason: {inner_error}"
-                }
-
+            match = re.search(r'\{.*\}', result_text, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+            else:
+                raise ValueError("No JSON object found in response.")
     except Exception as e:
-        return {"error": str(e), "disclaimer": "Analysis failed."}
-
+        logging.error(f"[OpenAI Error] {e}")
+        return {
+            "error": "AI response could not be parsed. Try again.",
+            "raw": result_text if 'result_text' in locals() else '',
+            "disclaimer": f"Parsing failed. Reason: {str(e)}"
+        }
 
 def export_to_pdf(results):
     pdf = FPDF()
@@ -150,6 +155,7 @@ def export_to_pdf(results):
     pdf.set_font("Arial", size=12)
     pdf.cell(200, 10, txt=f"Score: {results.get('score', 'N/A')}", ln=1)
     pdf.cell(200, 10, txt=f"Scan Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=1)
+    pdf.multi_cell(0, 10, txt=results.get('summary', 'No summary available.'))
     for issue in results.get('issues', []):
         pdf.multi_cell(0, 10, txt=f"{issue['criterion']} ({issue['severity']}): {issue['description']}")
         pdf.multi_cell(0, 10, txt=f"Fix: {issue['fix']}")
