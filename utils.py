@@ -39,21 +39,37 @@ def get_user_tier(email):
 
 from playwright.sync_api import sync_playwright
 
+from playwright.sync_api import sync_playwright
+
 def fetch_html(url):
-    from playwright.sync_api import sync_playwright
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            try:
-                page.goto(url, wait_until="networkidle", timeout=30000)
-            except Exception as e:
-                print(f"⚠️ Timeout or error during navigation: {e}")
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+            page = context.new_page()
+
+            # Ensure URL starts with https://
+            if not url.startswith("http"):
+                url = "https://" + url
+
+            # Navigate and wait for real content to appear
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_selector("main, body, div", timeout=10000)
+
             html = page.content()
             browser.close()
             return html
+
     except Exception as e:
-        return f"Error fetching URL with Playwright: {e}"
+        print(f"Error fetching URL with Playwright: {e}")
+        return None
+
 
 def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with code fixes."""
