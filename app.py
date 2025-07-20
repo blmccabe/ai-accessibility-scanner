@@ -8,7 +8,7 @@ from ui import (
 )
 import streamlit as st
 import os
-from utils import get_user_tier, fetch_html, analyze_accessibility, export_to_pdf, export_to_csv, export_to_excel
+from utils import get_user_tier, fetch_page_content, analyze_accessibility, export_to_pdf, export_to_csv, export_to_excel
 import stripe
 from PIL import Image
 
@@ -142,24 +142,27 @@ if st.button("Scan Site") and st.session_state.user_email:
     st.session_state.scan_count += 1 if st.session_state.tier == 'Free' else 0
 
     with st.spinner("Scanning..."):
-        html = fetch_html(url)
-        if "Error" in html:
-            st.error(html)
+        result = fetch_page_content(url)
+
+        if not result["success"]:
+            st.error(result.get("error", "Unknown error while fetching page."))
+            st.stop()
+
+        html = result["html"]
+        results = analyze_accessibility(html)
+        st.session_state["results"] = results
+        st.session_state["results"]["html"] = html  # Save HTML for persona simulation
+
+        if "error" in results:
+            st.error(results["error"])
         else:
-            results = analyze_accessibility(html)
-            st.session_state["results"] = results
-            st.session_state["results"]["html"] = html  # Save HTML for persona simulation
+            results["pdf"] = export_to_pdf(results)
+            results["csv"] = export_to_csv(results)
+            results["excel"] = export_to_excel(results)
+            render_results(results)
 
-            if "error" in results:
-                st.error(results["error"])
-            else:
-                results["pdf"] = export_to_pdf(results)
-                results["csv"] = export_to_csv(results)
-                results["excel"] = export_to_excel(results)
-                render_results(results)
-
-                if st.session_state.tier in ['Pro', 'Agency']:
-                    render_export_buttons(results)
+            if st.session_state.tier in ['Pro', 'Agency']:
+                render_export_buttons(results)
 
 # --- Persona Simulation Section ---
 if st.session_state.get("results") and st.session_state["results"].get("html"):
