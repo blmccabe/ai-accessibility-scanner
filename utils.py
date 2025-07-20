@@ -40,15 +40,15 @@ def get_user_tier(email):
 from playwright.sync_api import sync_playwright
 
 def fetch_html(url):
-    # Ensure the URL starts with http or https
-    if not url.startswith("http://") and not url.startswith("https://"):
-        url = "https://" + url
-
+    from playwright.sync_api import sync_playwright
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            try:
+                page.goto(url, wait_until="networkidle", timeout=30000)
+            except Exception as e:
+                print(f"⚠️ Timeout or error during navigation: {e}")
             html = page.content()
             browser.close()
             return html
