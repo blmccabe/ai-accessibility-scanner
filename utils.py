@@ -9,8 +9,10 @@ from fpdf import FPDF
 from datetime import datetime
 import csv
 import io
-import pandas as pd  # For Excel
+import pandas as pd
 from io import BytesIO
+from urllib.parse import urlparse
+from playwright.sync_api import sync_playwright
 
 # Load environment variables
 load_dotenv()
@@ -34,42 +36,51 @@ def get_user_tier(email):
                         return 'Agency'
                     return 'Unknown'
         return 'Free'
-    except Exception:
+    except Exception as e:
+        print(f"[Stripe Error] {e}")
         return 'Free'
 
-from playwright.sync_api import sync_playwright
+def normalize_url(url):
+    parsed = urlparse(url.strip())
+    if not parsed.scheme:
+        return 'https://' + url
+    return url
 
-from playwright.sync_api import sync_playwright
+def block_heavy_resources(route):
+    if route.request.resource_type in ["image", "media", "font", "stylesheet", "other"]:
+        route.abort()
+    else:
+        route.continue_()
 
-def fetch_html(url):
+def fetch_page_content(target_url):
     try:
+        target_url = normalize_url(target_url)
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            )
+            context = browser.new_context()
+            context.route("**/*", block_heavy_resources)
             page = context.new_page()
 
-            # Ensure URL starts with https://
-            if not url.startswith("http"):
-                url = "https://" + url
+            page.goto(target_url, timeout=30000, wait_until='domcontentloaded')
+            content = page.content()
 
-            # Navigate and wait for real content to appear
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            page.wait_for_selector("main, body, div", timeout=10000)
-
-            html = page.content()
+            context.close()
             browser.close()
-            return html
+
+            return {
+                "success": True,
+                "html": content
+            }
 
     except Exception as e:
-        print(f"Error fetching URL with Playwright: {e}")
-        return None
-
+        print("Error fetching with Playwright:", str(e))
+        return {
+            "success": False,
+            "error": f"Error fetching URL with Playwright: {str(e)}",
+            "score": 0,
+            "summary": "This site could not be scanned due to a loading issue. Double-check the URL or try a different one."
+        }
 
 def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with code fixes."""
@@ -81,32 +92,22 @@ def analyze_accessibility(html_content):
     - Robust: HTML validity, no deprecated elements.
 
     Respond only with valid JSON in this exact structure: {{
-      "issues": [
-        {{
-          "criterion": "WCAG ref",
-          "description": "Issue detail",
-          "severity": "Low/Med/High",
-          "fix": "Suggestion",
-          "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"
-        }}
-      ],
+      "issues": [...],
       "score": "0-100 estimate",
-      "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
-      "summary": "Brief AI summary of key issues for Pro users."
+      "disclaimer": "...",
+      "summary": "..."
     }}
 
     HTML: {html_content[:4000]}
     """
     try:
-        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1000,
-            temperature=0.5,
-            response_format={"type": "json_object"}
+            temperature=0.5
         )
-        result_text = response.choices[0].message.content.strip()
+        result_text = response.choices[0].message["content"].strip()
         import json
         try:
             return json.loads(result_text)
@@ -130,16 +131,20 @@ def export_to_pdf(results):
         pdf.multi_cell(0, 10, txt=f"Fix: {issue['fix']}")
         pdf.multi_cell(0, 10, txt=f"Code Fix: {issue['code_fix']}")
         pdf.ln(2)
-
-    pdf_bytes = pdf.output(dest='S').encode('latin1')
-    return BytesIO(pdf_bytes)
+    return BytesIO(pdf.output(dest='S').encode('latin1'))
 
 def export_to_csv(results):
     csv_output = io.StringIO()
     writer = csv.writer(csv_output, quoting=csv.QUOTE_ALL)
     writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix'])
     for issue in results.get('issues', []):
-        writer.writerow([issue['criterion'], issue['severity'], issue['description'], issue['fix'], issue['code_fix']])
+        writer.writerow([
+            issue.get('criterion', ''),
+            issue.get('severity', ''),
+            issue.get('description', ''),
+            issue.get('fix', ''),
+            issue.get('code_fix', '')
+        ])
     return BytesIO(csv_output.getvalue().encode("utf-8"))
 
 def export_to_excel(results):
