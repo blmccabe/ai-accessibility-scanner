@@ -92,10 +92,14 @@ def fetch_page_content(target_url):
                 "summary": "Unable to scan due to fetch error."
             }
 
-def analyze_accessibility(html_content):
+def analyze_accessibility(html_content, abbreviated=True):
     """Use AI to scan HTML for WCAG issues with chunking and JSON mode."""
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     chunks = [html_content[i:i+3000] for i in range(0, len(html_content), 3000)]
+    if abbreviated:
+        chunks = chunks[:2]  # Limit for preview/Free
+    else:
+        chunks = chunks  # Full (no limit)
     chunks = chunks[:2]  # Limit to 2 chunks to avoid rate limits
     results = []
     for chunk in chunks:

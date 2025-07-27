@@ -179,7 +179,7 @@ if submitted and st.session_state.user_email:
         st.error("Free scan limit reached. Upgrade for more.")
         st.stop()
     # Added: checkbox for full scan before scan
-    full_scan = st.checkbox("Full scan (slower but complete)", value=False, help="Uncheck for quicker preview")  # Added: checkbox for full scan before the scan starts, tooltips
+    full_scan = st.checkbox("Full scan (slower but complete)", value=False, help="Uncheck for quicker preview") if st.session_state.tier in ['Pro', 'Agency'] else False # Added: checkbox for full scan before the scan starts, tooltips
     increment_scan_count(st.session_state.user_email)
     with st.spinner("Scanning..."):
         # Added: check for valid URL before fetch
@@ -191,7 +191,8 @@ if submitted and st.session_state.user_email:
             st.error(result.get("error", "Unknown error while fetching page."))
             st.stop()
         html = result["html"]
-        results = analyze_accessibility(html)
+        st.session_state["html"] = html # Cache HTML for re-use
+        results = analyze_accessibility(html, abbreviated=not full_scan)
         st.session_state["results"] = results
         st.session_state["results"]["html"] = html
         if "error" in results:
@@ -203,6 +204,22 @@ if submitted and st.session_state.user_email:
         render_results(results)
         if st.session_state.tier in ['Pro', 'Agency']:
             render_export_buttons(results)
+# --- Post-Scan Full Toggle (Added: Re-run full if preview was abbreviated) ---
+if st.session_state.get("results") and st.session_state.tier in ['Pro', 'Agency']:
+    if st.button("Run Full Scan", help="Re-run complete analysis (no chunk limits)"):  # Button for explicit re-trigger
+        with st.spinner("Running full scan..."):
+            html = st.session_state.get("html")  # Re-use cached HTML
+            if html:
+                results = analyze_accessibility(html, abbreviated=False)  # Full mode
+                st.session_state["results"] = results
+                results["pdf"] = export_to_pdf(results)
+                results["csv"] = export_to_csv(results)
+                results["excel"] = export_to_excel(results)
+                render_results(results)
+                render_export_buttons(results)
+                st.success("Full scan complete!")
+            else:
+                st.error("No HTML available for full scan. Re-scan the site.")
 
 # --- Persona Simulation Section (Added spinner and help text) ---
 if st.session_state.get("results") and st.session_state["results"].get("html"):
