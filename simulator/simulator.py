@@ -1,76 +1,95 @@
-# simulator/simulator.py
+# simulator.py (Added 60K limit, chunking, warning, merge, fallback personas)
+import json
+import logging
+import os
+from openai import OpenAI
+import streamlit as st
+import time  # Added: time.sleep for rate limits
+
+logging.basicConfig(level=logging.INFO)
 
 def load_personas():
-    return {
-        "blind_screen_reader": {
-            "label": "Blind User (Screen Reader)",
-            "prompt": "Simulate how a blind user using a screen reader would experience this website's HTML. Identify any accessibility issues and explain how they affect navigation and understanding."
-        },
-        "keyboard_only_user": {
-            "label": "Keyboard-Only User",
-            "prompt": "Simulate how a keyboard-only user would experience this website. Identify any issues with tab order, focus indicators, and keyboard traps."
-        },
-        "colorblind_user": {
-            "label": "User with Color Blindness",
-            "prompt": "Simulate how a user with color blindness would experience this website. Identify potential color contrast or information issues and suggest improvements."
-        },
-        "low_vision_user": {
-            "label": "Low Vision User (Zoomed or Magnified View)",
-            "prompt": "Simulate how a low vision user using zoom or magnification would experience this page. Focus on readability, scaling issues, and spacing."
+    try:
+        with open("simulator/personas.json", "r") as f:
+            content = f.read().strip()
+            if not content:
+                raise ValueError("personas.json is empty")
+            return json.loads(content)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        logging.warning(f"Error loading personas.json: {str(e)}. Using fallback personas.")  # Added: fallback personas
+        return {
+            "blind_screen_reader": {
+                "label": "Blind user with screen reader",
+                "description": "Navigates entirely using keyboard and screen reader software.",
+                "prompt": """You are simulating a user who is blind and relies fully on screen reader software to navigate the web. This user cannot see visual layout, images, or content. They use keyboard shortcuts and linear audio output to understand the structure of the page.
+
+Pay special attention to:
+- Page title, landmarks, heading structure
+- Missing or non-descriptive alt text on images
+- Buttons or links without labels
+- Dynamic content that may not be announced
+- Reading order and tab sequence
+
+Highlight the biggest frustrations and recommend improvements to make this experience smoother for screen reader users."""
+            },
+            "low_vision_elderly": {
+                "label": "Low-vision elderly person",
+                "description": "Struggles with contrast, font size, and visual layout.",
+                "prompt": """You are simulating an elderly user with low vision and declining visual acuity. This person struggles with small font sizes, low color contrast, dense content, and poor spacing. They may zoom in to read, use a magnifier, or have trouble tracking elements.
+
+Evaluate:
+- Text readability (size, contrast, spacing)
+- Link and button visibility
+- Zoom behavior (does layout break?)
+- Visual clarity and clutter
+
+Provide feedback on how readable and usable the page is for someone with reduced visual perception."""
+            },
+            "motor_impaired_keyboard": {
+                "label": "Motor-impaired keyboard-only user",
+                "description": "Cannot use a mouse, relies on keyboard for navigation.",
+                "prompt": """You are simulating a user with a motor impairment who cannot use a mouse and relies entirely on keyboard navigation. They may use assistive devices like sip-and-puff or single-switch input.
+
+Assess the experience based on:
+- Tab order consistency
+- Presence of visible focus indicators
+- Availability of skip links
+- Whether all interactive elements (forms, menus, modals) are accessible by keyboard
+- Any keyboard traps or broken tab loops
+
+Report on how frustrating or seamless the experience would be for a keyboard-only user."""
+            }
         }
-    }
 
 def simulate_experience(html, persona_key):
-    from openai import OpenAI
     personas = load_personas()
     if persona_key not in personas:
         return {"error": f"Unknown persona: {persona_key}"}
-
     persona = personas[persona_key]
-
-    # Truncate HTML for token safety
-    if len(html) > 15000:
-        print("⚠️ HTML content truncated to 15,000 characters to avoid hitting GPT-4 limits.")
-    truncated_html = html[:15000]
-
+    limit = 60000  # Added: 60K limit for simulation
+    chunks = [html[i:i+3000] for i in range(0, len(html), 3000)] if len(html) > limit else [html[:limit]]
+    if len(html) > limit:
+        st.warning(f"HTML content chunked for simulation ({len(chunks)} chunks).")  # Added: warning for truncation
+    results = []
+    progress = st.progress(0, text="Simulating experience...")  # Added: progress bar
     try:
-        client = OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": f"""
-{persona['prompt']}
-
-You are an accessibility expert simulating this user’s experience. 
-Please return your output in **this exact markdown format**:
-
-### 🔍 Experience Summary for {persona['label']}
-
-**Main Barriers Encountered:**
-- ...
-
-**Navigation Issues:**
-- ...
-
-**Content Gaps:**
-- ...
-
-**Recommendations:**
-- ...
-"""
-                },
-                {
-                    "role": "user",
-                    "content": truncated_html
-                }
-            ],
-            temperature=0.5,
-        )
-        return response.choices[0].message.content
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        for i, chunk in enumerate(chunks):
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": persona['prompt'] + "\n\nOutput in structured Markdown as specified."},
+                    {"role": "user", "content": chunk}
+                ],
+                temperature=0.5,
+            )
+            result = response.choices[0].message.content
+            results.append(result)
+            progress.progress((i + 1) / len(chunks))  # Added: progress update
+            time.sleep(1)  # Added: time.sleep for rate limits
+        # Added: merge for chunked outputs
+        merged_result = "\n\n".join(results)
+        return merged_result
     except Exception as e:
-        return {"error": str(e)}
-
-
-
+        logging.error(f"[Simulation Error] {str(e)}")
+        return {"error": "Failed to simulate experience. Please try again or contact support."}

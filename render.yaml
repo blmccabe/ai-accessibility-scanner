@@ -1,4 +1,16 @@
-build:
-  commands:
-    - pip install -r requirements.txt
-    - playwright install --with-deps
+# render.yaml (Completed for Render.com deployment, assuming web service)
+services:
+  - type: web
+    name: nexassistai
+    env: python
+    plan: free  # or starter/pro as needed
+    buildCommand: pip install -r requirements.txt && playwright install --with-deps
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: ENV
+        value: prod
+      - key: OPENAI_API_KEY
+        sync: false  # Add via dashboard for security
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      # Add other env vars similarly
