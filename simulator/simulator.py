@@ -61,20 +61,25 @@ Report on how frustrating or seamless the experience would be for a keyboard-onl
             }
         }
 
-def simulate_experience(html, persona_key):
+def simulate_experience(html, persona_key, abbreviated=True):
     personas = load_personas()
     if persona_key not in personas:
         return {"error": f"Unknown persona: {persona_key}"}
     persona = personas[persona_key]
-    limit = 60000  # Added: 60K limit for simulation
+    limit = 60000  # 60K limit for simulation
     chunks = [html[i:i+3000] for i in range(0, len(html), 3000)] if len(html) > limit else [html[:limit]]
     if len(html) > limit:
-        st.warning(f"HTML content chunked for simulation ({len(chunks)} chunks).")  # Added: warning for truncation
+        st.warning(f"HTML content chunked for simulation ({len(chunks)} chunks).")  # Warning for truncation
+    if abbreviated:
+        chunks = chunks[:10]  # Cap at 10 chunks for quick sim
+    if len(chunks) > 10:
+        st.warning(f"Large site: Using first 10 chunks for simulation to avoid delays.")  # Warning for cap
     results = []
-    progress = st.progress(0, text="Simulating experience...")  # Added: progress bar
+    progress = st.progress(0, text="Simulating experience...")  # Progress bar
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         for i, chunk in enumerate(chunks):
+            if st.session_state.get('sim_cancel', False): break  # Cancel if switch
             response = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -85,10 +90,18 @@ def simulate_experience(html, persona_key):
             )
             result = response.choices[0].message.content
             results.append(result)
-            progress.progress((i + 1) / len(chunks))  # Added: progress update
-            time.sleep(1)  # Added: time.sleep for rate limits
-        # Added: merge for chunked outputs
+            progress.progress((i + 1) / len(chunks))  # Progress update
+            time.sleep(1)  # Rate limit sleep
         merged_result = "\n\n".join(results)
+        # Summarize merged result to reduce verbosity
+        summary_prompt = "Summarize this simulation output: Focus on top 5 issues and fixes."
+        summary_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": summary_prompt + "\n\n" + merged_result}],
+            temperature=0.5,
+            max_tokens=500
+        )
+        merged_result = summary_response.choices[0].message.content
         return merged_result
     except Exception as e:
         logging.error(f"[Simulation Error] {str(e)}")

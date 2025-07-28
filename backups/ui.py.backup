@@ -1,4 +1,4 @@
-# ui.py (Added unique keys for export buttons, ARIA for tabs via custom labels, tooltips if needed)
+# ui.py (No changes needed, but included for completeness)
 import streamlit as st
 import os
 
@@ -6,7 +6,7 @@ def render_logo_and_header():
     col1, col2 = st.columns([1, 3])
     with col1:
         if os.path.exists("assets/logo.png"):
-            st.image("assets/logo.png", width=120)
+            st.image("assets/logo.png", width=60)
         else:
             st.markdown("**NexAssistAI**")
     with col2:
@@ -20,8 +20,6 @@ def render_plan_message(tier):
         st.success("🚀 Pro User: Unlimited scans, PDF/CSV exports, and code fixes.")
     elif tier == "Agency":
         st.success("🏢 Agency Tier: Multi-domain support and white-labeled reports.")
-    elif tier == "Enterprise":
-        st.success("🏢 Enterprise Tier: Custom scan workflows and APIs.")
 
 def render_email_url_form():
     st.markdown("### Get Started")
@@ -45,10 +43,10 @@ def render_results(results):
     if not issues:
         st.warning("No accessibility issues found or analysis failed.")
     else:
-        # Added: ARIA for tabs (st.tabs doesn't support direct ARIA, so use custom labels)
         tabs = st.tabs(["Perceivable", "Operable", "Understandable", "Robust"])
         categories = {"Perceivable": [], "Operable": [], "Understandable": [], "Robust": []}
         for issue in issues:
+            # Categorize based on WCAG criterion (e.g., 1.x = Perceivable)
             if issue.get('criterion', '').startswith('1'):
                 categories["Perceivable"].append(issue)
             elif issue.get('criterion', '').startswith('2'):
@@ -65,17 +63,13 @@ def render_results(results):
                         st.markdown(f"**Fix:** {issue.get('fix', 'No fix provided')}")
                         code_fix = issue.get('code_fix', 'N/A')
                         if code_fix and code_fix != "N/A":
-                            if st.session_state.tier in ['Pro', 'Agency']:
-                                st.code(code_fix, language='html')
-                                escaped_code = code_fix.replace('\\', '\\\\').replace('`', '\\`').replace('"', '\\"').replace("'", "\\'")
-                                copy_button = f"""
-                                <button onclick="navigator.clipboard.writeText(`{escaped_code}`)">Copy Code</button>
-                                """
-                                st.markdown(copy_button, unsafe_allow_html=True)
-                            else:
-                                st.info("Code fixes available in Pro/Agency tiers. Upgrade to see.")
-                        else:
-                            st.warning("No code fix generated for this issue.")  # Debug if 'N/A'
+                            st.code(code_fix, language='html')
+                            escaped_code = code_fix.replace('`', '\\`')
+                            copy_button = f"""
+                            <button onclick="navigator.clipboard.writeText(`{escaped_code}`)">Copy Code</button>
+                            """
+                            st.markdown(copy_button, unsafe_allow_html=True)
+
 def render_export_buttons(results):
     st.subheader("📤 Export Report")
     if not all(key in results for key in ["pdf", "csv", "excel"]):
@@ -83,8 +77,8 @@ def render_export_buttons(results):
         return
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
-        st.download_button("Download PDF", results["pdf"], file_name="scan_report.pdf", mime="application/pdf", key="download_pdf")  # Added: unique keys for export buttons
+        st.download_button("Download PDF", results["pdf"], file_name="scan_report.pdf", mime="application/pdf")
     with col2:
-        st.download_button("Download CSV", results["csv"], file_name="scan_report.csv", mime="text/csv", key="download_csv")  # Added: unique keys for export buttons
+        st.download_button("Download CSV", results["csv"], file_name="scan_report.csv", mime="text/csv")
     with col3:
-        st.download_button("Download Excel", results["excel"], file_name="scan_report.xlsx", mime="application/vnd.ms-excel", key="download_excel")  # Added: unique keys for export buttons
+        st.download_button("Download Excel", results["excel"], file_name="scan_report.xlsx", mime="application/vnd.ms-excel")

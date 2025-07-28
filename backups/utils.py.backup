@@ -20,7 +20,6 @@ import re
 import html
 import backoff
 import time  # Fixed: added import time for time.sleep
-import streamlit as st
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -93,14 +92,10 @@ def fetch_page_content(target_url):
                 "summary": "Unable to scan due to fetch error."
             }
 
-def analyze_accessibility(html_content, abbreviated=True):
+def analyze_accessibility(html_content):
     """Use AI to scan HTML for WCAG issues with chunking and JSON mode."""
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     chunks = [html_content[i:i+3000] for i in range(0, len(html_content), 3000)]
-    if abbreviated:
-        chunks = chunks[:2]  # Limit for preview/Free
-    else:
-        chunks = chunks  # Full (no limit)
     chunks = chunks[:2]  # Limit to 2 chunks to avoid rate limits
     results = []
     for chunk in chunks:
@@ -119,7 +114,8 @@ Respond only with valid JSON in this exact structure: {{
       "description": "Issue detail",
       "severity": "Low/Med/High",
       "fix": "Suggestion",
-      "code_fix": "Always provide an example HTML/CSS/JS code snippet to fix the issue. Do not use 'N/A'—generate a fix even if minor."    }}
+      "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"
+    }}
   ],
   "score": 0-100 estimate,
   "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
@@ -143,7 +139,6 @@ HTML: {safe_html_snippet}
             logging.error(f"[OpenAI Error] {e}")
             return {"error": "AI response could not be parsed. Try again.", "disclaimer": f"Parsing failed. Reason: {str(e)}"}
     merged = {"issues": [], "score": 0, "disclaimer": results[0]["disclaimer"], "summary": ""}
-    logging.info(f"Generated {len(merged['issues'])} issues with code fixes.")
     for r in results:
         merged["issues"].extend(r.get("issues", []))
         merged["score"] += int(r.get("score", 0)) / len(results)
@@ -154,9 +149,6 @@ def export_to_pdf(results):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     pdf.setFont("Helvetica", 12)
-    tier = st.session_state.get('tier', 'Free') if 'tier' in st.session_state else 'Free'
-    if tier != 'Agency':
-        pdf.drawString(30, 770, "NexAssistAI Report")  # Branding for non-Agency
     pdf.drawString(30, 750, f"Score: {results.get('score', 'N/A')}")
     pdf.drawString(30, 730, f"Scan Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     y = 700
