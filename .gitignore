@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .vscode/
 scans.db
+venv/
+__pycache__/
+*.pyc
+.env
