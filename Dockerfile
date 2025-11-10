@@ -22,7 +22,7 @@ RUN apt-get update && \
         libxrandr2 libgbm1 libxcomposite1 libxkbcommon0 libpango-1.0-0 \
         libpangoft2-1.0-0 libpangocairo-1.0-0 libcups2 && \
     rm -rf /var/lib/apt/lists/* && \
-    playwright install chromium --no-deps
+    playwright install chromium
 
 
 # Copy app code
