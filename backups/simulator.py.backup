@@ -9,8 +9,7 @@ import time
 from bs4 import BeautifulSoup
 from gtts import gTTS
 import io
-from utils import create_checkout_button
-import logging
+
 logging.basicConfig(level=logging.INFO)
 
 def load_personas():
@@ -73,8 +72,7 @@ def simulate_experience(html, persona_key):
         return {"error": f"Unknown persona: {persona_key}"}
     persona = personas[persona_key]
     limit = 60000
-    chunks = [html[i:i+5000] for i in range(0, len(html), 5000)]  # Larger chunks for speed
-    chunks = chunks[:3] if st.session_state.tier == 'Free' else chunks  # Limit Free for speed
+    chunks = [html[i:i+3000] for i in range(0, len(html), 3000)] if len(html) > limit else [html[:limit]]
     if len(html) > limit:
         st.warning(f"HTML content chunked for simulation ({len(chunks)} chunks).")
     results = []
@@ -83,7 +81,7 @@ def simulate_experience(html, persona_key):
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         for i, chunk in enumerate(chunks):
             response = client.chat.completions.create(
-                model="gpt-3.5-turbo" if st.session_state.tier == 'Free' else "gpt-4o",  # Faster model for Free
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": persona['prompt'] + "\n\nOutput in structured Markdown."},
                     {"role": "user", "content": chunk}
@@ -93,12 +91,12 @@ def simulate_experience(html, persona_key):
             result = response.choices[0].message.content
             results.append(result)
             progress.progress((i + 1) / len(chunks))
-            time.sleep(0.5)  # Reduced for speed
+            time.sleep(1)
         merged_result = "\n\n".join(results)
         if len(merged_result) > 2000:
             summary_prompt = "Summarize simulation: Top 5 issues and fixes."
             summary_response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": summary_prompt + "\n\n" + merged_result}],
                 temperature=0.5,
                 max_tokens=500
@@ -126,12 +124,14 @@ def demo_simulation(html):
             st.markdown("### Blind User Demo: Screen Reader Preview")
             soup = BeautifulSoup(html, 'html.parser')
             text = soup.get_text(separator=' ', strip=True)
+            # Deduplicate and format
             lines = list(dict.fromkeys(text.splitlines()))
             formatted_text = "## Page Structure\n" + "\n".join(f"- {line}" for line in lines if line.strip())[:500] + "\n\n... (upgrade for full analysis)"
             with st.expander("Screen Reader Output Preview (click to expand)", expanded=False):
                 st.markdown(formatted_text)
                 st.markdown("**Example Issue**: Missing alt text on images makes content inaccessible to screen readers.")
                 st.markdown("**Fix**: Add `alt='Description'` to `<img>` tags, e.g., `<img src='logo.png' alt='NASA logo'>`.")
+            # Add TTS audio with options
             voice_speed = st.slider(
                 "Mock Screen Reader Speed",
                 0.5, 2.0, 1.0,
@@ -139,20 +139,23 @@ def demo_simulation(html):
                 key="tts_speed"
             )
             if st.button("Play Mock Screen Reader Audio", key="tts_button"):
-                plain_text = " ".join(lines[:10])[:200]
+                plain_text = " ".join(lines[:10])[:200]  # Use plain text, limit to 200 chars
                 if plain_text.strip():
                     try:
                         tts = gTTS(plain_text, slow=(voice_speed < 1.0))
-                        buffer = io.BytesIO()
-                        tts.write_to_fp(buffer)
+                        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
+                            tts.save(tmp_file.name)
+                            with open(tmp_file.name, "rb") as f:
+                                buffer = io.BytesIO(f.read())
                         buffer.seek(0)
                         st.audio(buffer, format="audio/mp3")
+                        os.unlink(tmp_file.name)
                     except Exception as e:
                         logging.error(f"TTS Error: {str(e)}")
-                        st.error(f"Audio generation failed: {str(e)}. Ensure internet connection and try again.")
+                        st.error("Audio generation failed—upgrade for full simulations!")
                 else:
-                    st.error("No text available for audio—try a different page or upgrade.")
-            st.markdown("**Tip**: Screen readers read linearly—use headings/labels for accessibility (WCAG 1.3.1).")
+                    st.error("No text available for audio—upgrade for full simulations!")
+            st.markdown("**Tip**: Screen readers read linearly—ensure clear headings and labels for accessibility (WCAG 1.3.1).")
         elif selected_demo == "low_vision_elderly":
             st.markdown("### Low-Vision Demo: High-Contrast Preview")
             st.markdown("<style> .low-vision-demo { font-size: 24px; color: #000; background: #fff; padding: 10px; } </style>", unsafe_allow_html=True)
@@ -173,3 +176,24 @@ def demo_simulation(html):
             st.markdown("**Example Issue**: Red/green buttons look identical to color blind users.")
             st.markdown("**Fix**: Add icons or text labels, e.g., `<button>Submit ✓</button>`.")
             st.markdown("**Tip**: Color blind users may confuse red/green—use patterns or labels (WCAG 1.4.1).")
+        st.markdown("**Why Upgrade?** Get full AI-powered simulations, code fixes, and exports to make your site accessible. Over 100 developers and agencies have upgraded!")
+        st.markdown(
+            """
+            <style>
+            .upgrade-button {
+                background-color: #315b7c;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+            .upgrade-button:hover {
+                background-color: #45a049;
+            }
+            </style>
+            <a href='https://www.nexassistai.com/upgrade' class='upgrade-button'>Upgrade to Pro Now ($9/mo)</a>
+            """,
+            unsafe_allow_html=True
+        )

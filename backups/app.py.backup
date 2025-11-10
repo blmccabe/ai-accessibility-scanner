@@ -1,13 +1,18 @@
-# app.py (Added URL validation, other fixes unchanged)
+# app.py (Fixed NameError for increment_scan_count, sidebar selectbox navigation)
 import streamlit as st
 import os
 import sqlite3
 from datetime import datetime
 import re
-from utils import get_user_tier, fetch_page_content, analyze_accessibility, export_to_pdf, export_to_csv, export_to_excel
+from utils import get_user_tier, fetch_page_content, analyze_accessibility, export_to_pdf, export_to_csv, export_to_excel, normalize_url
 import stripe
-from simulator.simulator import load_personas, simulate_experience
+from simulator.simulator import load_personas, simulate_experience, demo_simulation
+from ui import render_logo_and_header, render_email_url_form, render_help_link, render_plan_message, render_results, render_export_buttons
 import logging
+from gtts import gTTS
+import tempfile
+import requests
+from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO)
 
@@ -23,7 +28,7 @@ domain = os.getenv("PROD_DOMAIN") if env == "prod" else os.getenv("LOCAL_DOMAIN"
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
-# --- Custom CSS (Added media queries for mobile) ---
+# --- Custom CSS ---
 st.markdown("""
     <style>
     .logo-container {
@@ -50,6 +55,24 @@ st.markdown("""
     .reportview-container {
         background-color: #ffffff;
     }
+    .stSelectbox > div > div > select {
+        background-color: #f8f9fa;
+    }
+    .upgrade-button {
+        background-color: #315b7c;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 16px;
+        display: block;
+        margin-bottom: 10px;
+        text-align: center;
+    }
+    .upgrade-button:hover {
+        background-color: #234670;
+    }
     @media (max-width: 600px) {
         .stColumn { width: 100%; margin-bottom: 1rem; }
         .stExpander { width: 100%; }
@@ -63,10 +86,19 @@ for key, val in {
     'tier': 'Free',
     'scan_count': 0,
     'results': None,
-    'dark_mode': False
+    'html': None,
+    'dark_mode': False,
+    'menu_index': 0
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
+
+# Initialize SQLite database
+conn = sqlite3.connect("scans.db")
+cursor = conn.cursor()
+cursor.execute("CREATE TABLE IF NOT EXISTS scans (email TEXT, count INTEGER, date TEXT)")
+conn.commit()
+conn.close()
 
 # --- Dark mode toggle ---
 if st.sidebar.checkbox("Dark Mode", value=st.session_state.dark_mode, help="Switch to dark theme"):
@@ -78,13 +110,14 @@ if st.sidebar.checkbox("Dark Mode", value=st.session_state.dark_mode, help="Swit
         .stButton > button { background-color: #0056b3; }
         .stMarkdown, .stInfo, .stError, .stWarning { color: #f0f0f0; }
         .stExpander { background-color: #1e1e1e; color: #ffffff; }
+        .stSelectbox > div > div > select { background-color: #2c2c2c; color: #ffffff; }
         </style>
     """, unsafe_allow_html=True)
 else:
     st.session_state.dark_mode = False
     st.markdown("<style> .reportview-container { background-color: #ffffff; } </style>", unsafe_allow_html=True)
 
-# --- Query Parameter Handling (Added success message and tier force refresh) ---
+# --- Query Parameter Handling ---
 session_id = st.query_params.get("session_id")
 session_id = session_id[0] if isinstance(session_id, list) and session_id else session_id if isinstance(session_id, str) else None
 
@@ -95,22 +128,18 @@ if session_id and not st.session_state.get("user_email"):
         if email and re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', email):
             st.session_state.user_email = email
             st.session_state.tier = get_user_tier(email)
-            st.success("Subscription successful! Your plan has been updated.")  # Success message
-        st.query_params.clear()
-        st.rerun()
+            st.success("Subscription successful! Your plan has been updated. Enjoy unlimited scans.")
+            st.query_params.clear()
+            st.rerun()
     except Exception as e:
         st.error(f"❌ Error retrieving Stripe session: {str(e)}")
 
 # --- Logo + header ---
-from ui import render_logo_and_header, render_email_url_form, render_help_link, render_plan_message, render_results, render_export_buttons
 render_logo_and_header()
 render_help_link()
 st.info("👋 New here? Enter your info below to run a full scan and see results in seconds.")
 
-# --- Email + URL Form ---
-email, url, submitted = render_email_url_form()
-
-# --- Validate and set user info (Added real-time validation) ---
+# --- Validate and set user info ---
 def validate_email():
     if 'email_input' in st.session_state and not re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', st.session_state.email_input):
         st.error("Invalid email format. Use name@example.com.")
@@ -118,16 +147,16 @@ def validate_email():
         st.session_state.user_email = st.session_state.email_input
         st.session_state.tier = get_user_tier(st.session_state.user_email)
 
-if email:
+if st.session_state.get("email_input"):
     validate_email()
 
 render_plan_message(st.session_state.tier)
 
 # --- Stripe upgrade buttons ---
 def create_checkout_button(label, price_env_var):
-    if st.sidebar.button(label):
+    if st.sidebar.button(label, key=f"checkout_{price_env_var}"):
         if not st.session_state.user_email:
-            st.sidebar.error("⚠️ Please enter a valid email above first.")
+            st.sidebar.error("⚠️ Please enter a valid email in the form first.")
             return
         with st.spinner("Generating secure checkout session..."):
             try:
@@ -142,9 +171,6 @@ def create_checkout_button(label, price_env_var):
                 st.markdown(f'<meta http-equiv="refresh" content="0; url={session.url}" />', unsafe_allow_html=True)
             except Exception as e:
                 st.sidebar.error(f"❌ Error creating Stripe session: {str(e)}")
-
-create_checkout_button("Upgrade to Pro ($9/mo)", "STRIPE_PRO_PRICE_ID")
-create_checkout_button("Upgrade to Agency ($49/mo)", "STRIPE_AGENCY_PRICE_ID")
 
 # --- Help section ---
 with st.expander("📘 First time here? Click for help", expanded=False):
@@ -169,61 +195,219 @@ def check_scan_limit(email):
 def increment_scan_count(email):
     conn = sqlite3.connect("scans.db")
     cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS scans (email TEXT, count INTEGER, date TEXT)")
     cursor.execute("INSERT OR REPLACE INTO scans (email, count, date) VALUES (?, COALESCE((SELECT count + 1 FROM scans WHERE email = ? AND date = ?), 1), ?)",
                   (email, email, datetime.utcnow().date().isoformat(), datetime.utcnow().date().isoformat()))
     conn.commit()
     conn.close()
 
-if submitted and st.session_state.user_email:
-    if st.session_state.tier == 'Free' and check_scan_limit(st.session_state.user_email) >= 1:
-        st.error("Free scan limit reached. Upgrade for more.")
-        st.stop()
-    # Added: checkbox for full scan before scan
-    full_scan = st.checkbox("Full scan (slower but complete)", value=False, help="Uncheck for quicker preview")  # Added: checkbox for full scan before the scan starts, tooltips
-    increment_scan_count(st.session_state.user_email)
-    with st.spinner("Scanning..."):
-        # Added: check for valid URL before fetch
-        if not url.strip():
-            st.error("Please enter a valid URL.")
-            st.stop()
-        result = fetch_page_content(url)
-        if not result["success"]:
-            st.error(result.get("error", "Unknown error while fetching page."))
-            st.stop()
-        html = result["html"]
-        results = analyze_accessibility(html)
-        st.session_state["results"] = results
-        st.session_state["results"]["html"] = html
-        if "error" in results:
-            st.error(results["error"])
-            st.stop()
-        results["pdf"] = export_to_pdf(results)
-        results["csv"] = export_to_csv(results)
-        results["excel"] = export_to_excel(results)
-        render_results(results)
-        if st.session_state.tier in ['Pro', 'Agency']:
-            render_export_buttons(results)
+# --- Sidebar Menu for Navigation ---
+def update_menu(*args, **kwargs):
+    st.session_state["menu_index"] = menu_options.index(st.session_state["menu"])
+    logging.info(f"Menu updated to: {st.session_state['menu']}")
 
-# --- Persona Simulation Section (Added spinner and help text) ---
-if st.session_state.get("results") and st.session_state["results"].get("html"):
-    personas = load_personas()
-    selected_key = st.selectbox(
-        "👤 Simulate Accessibility Experience",
-        options=list(personas.keys()),
-        format_func=lambda key: personas[key]["label"],
-        help="Select a persona to simulate their experience"  # Fixed: static help text to avoid NameError
-    )
-    if selected_key:
-        st.info(personas[selected_key]["description"])  # Added: st.info for dynamic description after selection
-        with st.spinner("Simulating experience..."):
-            simulation = simulate_experience(st.session_state["results"]["html"], selected_key)
-            if isinstance(simulation, dict) and simulation.get("error"):
-                st.error(f"Simulator Error: {simulation['error']}")
-            else:
-                st.subheader(f"🔍 Accessibility Persona Simulation — {personas[selected_key]['label']}")
-                st.markdown(simulation)
-else:
-    st.warning("No HTML content available for simulation. Run a scan first.")
+st.sidebar.title("Navigation")
+menu_options = ["🔍 Get Started", "📊 Scan Results", "👤 Persona Simulation"]
+if st.session_state.tier in ['Pro', 'Agency', 'Enterprise']:
+    menu_options.append("📤 Exports")
+menu = st.sidebar.selectbox(
+    "Go to",
+    menu_options,
+    index=st.session_state.get("menu_index", 0),
+    key="menu",
+    label_visibility="visible",
+    help="Navigate to different sections of your scan results",
+    on_change=update_menu,
+    args=("aria-label", "Main navigation menu")
+)
+st.session_state["menu_index"] = menu_options.index(menu)
+
+# --- Sticky Upgrade Buttons in Sidebar ---
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Upgrade Your Plan")
+if st.session_state.tier not in ['Pro', 'Agency', 'Enterprise']:
+    if st.session_state.get("user_email"):
+        create_checkout_button("🔓 Unlock Pro ($9/mo)", "STRIPE_PRO_PRICE_ID")
+        create_checkout_button("🏢 Agency Access ($49/mo)", "STRIPE_AGENCY_PRICE_ID")
+    else:
+        st.sidebar.warning("🔒 Enter your email above to unlock upgrade options.")
+st.sidebar.info(f"🛠️ You are on the **{st.session_state.tier}** plan. Upgrade for more features.")
+
+# --- Main Content Based on Menu Selection ---
+if menu == "🔍 Get Started":
+    email, url, submitted = render_email_url_form()
+    if submitted and st.session_state.user_email:
+        if st.session_state.tier == 'Free' and check_scan_limit(st.session_state.user_email) >= 1:
+            st.error("Free scan limit reached. Upgrade for more.")
+            if st.button("Retry", key="retry_limit"):
+                st.rerun()
+            st.stop()
+        full_scan = st.checkbox("Full scan (slower but complete)", value=False, help="Uncheck for quicker preview") if st.session_state.tier in ['Pro', 'Agency', 'Enterprise'] else False
+        increment_scan_count(st.session_state.user_email)
+        with st.spinner("Scanning..."):
+            if not url.strip():
+                st.error("Please enter a valid URL.")
+                auto_retry = st.checkbox("Auto-retry", value=False, key="auto_retry_url")
+                if auto_retry:
+                    time.sleep(2)
+                    st.rerun()
+                if st.button("Retry", key="retry_url"):
+                    st.rerun()
+                st.stop()
+            result = fetch_page_content(url)
+            if not result["success"]:
+                st.error(result.get("error", "Unknown error while fetching page."))
+                auto_retry = st.checkbox("Auto-retry", value=False, key="auto_retry_fetch")
+                if auto_retry:
+                    time.sleep(2)
+                    st.rerun()
+                if st.button("Retry", key="retry_fetch"):
+                    st.rerun()
+                st.stop()
+            html = result["html"]
+            st.session_state["html"] = html
+            results = analyze_accessibility(html, abbreviated=not full_scan)
+            st.session_state["results"] = results
+            st.session_state["results"]["html"] = html
+            if "error" in results:
+                st.error(results["error"])
+                if st.button("Retry", key="retry_analysis"):
+                    st.rerun()
+                st.stop()
+            results["pdf"] = export_to_pdf(results)
+            results["csv"] = export_to_csv(results)
+            results["excel"] = export_to_excel(results)
+            st.session_state["menu_index"] = menu_options.index("📊 Scan Results")
+            st.rerun()
+elif menu == "📊 Scan Results":
+    if st.session_state.get("results"):
+        render_results(st.session_state["results"])
+        if st.session_state.tier in ['Pro', 'Agency', 'Enterprise']:
+            if st.button("Run Full Scan", help="Re-run complete analysis (no chunk limits)", key="full_scan"):
+                with st.spinner("Running full scan..."):
+                    html = st.session_state.get("html")
+                    if html:
+                        results = analyze_accessibility(html, abbreviated=False)
+                        st.session_state["results"] = results
+                        results["pdf"] = export_to_pdf(results)
+                        results["csv"] = export_to_csv(results)
+                        results["excel"] = export_to_excel(results)
+                        render_results(results)
+                        st.success("Full scan complete!")
+                    else:
+                        st.error("No HTML available for full scan. Re-scan the site.")
+        else:
+            st.markdown(
+                """
+                <style>
+                .upgrade-button {
+                    background-color: #315b7c;
+                    color: white;
+                    padding: 10px 20px;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                }
+                .upgrade-button:hover {
+                    background-color: #234670;
+                }
+                </style>
+                <a href='https://www.nexassistai.com/upgrade' class='upgrade-button' aria-label='Upgrade to Pro for full scans'>Upgrade to Pro for Full Scans ($9/mo)</a>
+                """,
+                unsafe_allow_html=True
+            )
+    else:
+        st.info("No scan results yet. Run a scan in Get Started.")
+elif menu == "👤 Persona Simulation":
+    if st.session_state.get("results") and st.session_state["results"].get("html"):
+        if st.session_state.tier in ['Pro', 'Agency', 'Enterprise']:
+            if st.checkbox("Run Simulation (paid feature)", help="Simulate how users with disabilities experience the site", key="run_simulation"):
+                personas = load_personas()
+                selected_key = st.selectbox(
+                    "👤 Simulate Accessibility Experience",
+                    options=list(personas.keys()),
+                    format_func=lambda key: personas[key]["label"],
+                    help="Choose a persona to simulate (e.g., blind user)",
+                    key="paid_persona_select"
+                )
+                if selected_key:
+                    st.info(personas[selected_key]["description"])
+                    with st.spinner("Simulating experience..."):
+                        simulation = simulate_experience(st.session_state["results"]["html"], selected_key)
+                        if isinstance(simulation, dict) and simulation.get("error"):
+                            st.error(f"Simulator Error: {simulation['error']}")
+                        else:
+                            st.subheader(f"🔍 Accessibility Persona Simulation — {personas[selected_key]['label']}")
+                            st.markdown(simulation)
+                            # TTS for paid tiers
+                            plain_text = simulation.replace('#', '').replace('-', '').replace('\n', ' ')[:200]
+                            voice_speed = st.slider("Screen Reader Audio Speed", 0.5, 2.0, 1.0, key="paid_tts_speed")
+                            if st.button("Play Simulation Audio", key="paid_tts_button"):
+                                try:
+                                    tts = gTTS(plain_text, slow=(voice_speed < 1.0))
+                                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
+                                        tts.save(tmp_file.name)
+                                        with open(tmp_file.name, "rb") as f:
+                                            buffer = io.BytesIO(f.read())
+                                    buffer.seek(0)
+                                    st.audio(buffer, format="audio/mp3")
+                                    os.unlink(tmp_file.name)
+                                except Exception as e:
+                                    logging.error(f"TTS Error in Paid: {str(e)}")
+                                    st.error("Audio generation failed—try again.")
+        else:
+            demo_simulation(st.session_state["results"]["html"])
+            st.markdown(
+                """
+                <style>
+                .upgrade-button {
+                    background-color: #315b7c;
+                    color: white;
+                    padding: 10px 20px;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 16px;
+                }
+                .upgrade-button:hover {
+                    background-color: #234670;
+                }
+                </style>
+                <a href='https://www.nexassistai.com/upgrade' class='upgrade-button' aria-label='Upgrade to Pro for full simulations'>Upgrade to Pro for Full Simulations ($9/mo)</a>
+                """,
+                unsafe_allow_html=True
+            )
+    else:
+        st.warning("Run a scan first to enable simulations.")
+elif menu == "📤 Exports":
+    if st.session_state.get("results") and st.session_state.tier in ['Pro', 'Agency', 'Enterprise']:
+        render_export_buttons(st.session_state["results"])
+    else:
+        st.warning("Exports available in Pro tiers. Upgrade to unlock.")
+        st.markdown(
+            """
+            <style>
+            .upgrade-button {
+                background-color: #315b7c;
+                color: white;
+                padding: 10px 20px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+                display: block;
+                margin-bottom: 10px;
+                text-align: center;
+            }
+            .upgrade-button:hover {
+                background-color: #234670;
+            }
+            </style>
+            <a href='https://www.nexassistai.com/upgrade' class='upgrade-button' aria-label='Upgrade to Pro for exports'>Upgrade to Pro for Exports ($9/mo)</a>
+            """,
+            unsafe_allow_html=True
+        )
 
 # --- Footer ---
 st.caption("Free: 1 scan/day. Pro: Unlimited + exports + code fixes. Agency: Multi-domain + white-label. Enterprise: Custom.")

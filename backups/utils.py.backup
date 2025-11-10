@@ -1,5 +1,7 @@
-# utils.py (Added import time for time.sleep, increased Playwright timeout, other fixes)
+# utils.py
 import os
+import html
+from io import BytesIO
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -11,15 +13,14 @@ from datetime import datetime
 import csv
 import io
 import pandas as pd
-from io import BytesIO
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 import logging
 import json
 import re
-import html
 import backoff
-import time  # Fixed: added import time for time.sleep
+import time
+import streamlit as st
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
@@ -33,7 +34,7 @@ def get_user_tier(email):
             if customers.data:
                 customer = customers.data[0]
                 subs = stripe.Subscription.list(customer=customer.id)
-                if subs.data and subs.data[0].status == 'active':
+                if subs.data and subs.data[0].status == 'active' and hasattr(subs.data[0], 'plan'):
                     price_id = subs.data[0].plan.id
                     if price_id == os.getenv("STRIPE_PRO_PRICE_ID"):
                         return 'Pro'
@@ -72,7 +73,7 @@ def fetch_page_content(target_url):
             context = browser.new_context()
             context.route("**/*", block_heavy_resources)
             page = context.new_page()
-            page.goto(target_url, timeout=60000, wait_until='domcontentloaded')  # Increased timeout to 60s to fix timeout
+            page.goto(target_url, timeout=60000, wait_until='domcontentloaded')
             content = page.content()
             context.close()
             browser.close()
@@ -92,34 +93,63 @@ def fetch_page_content(target_url):
                 "summary": "Unable to scan due to fetch error."
             }
 
-def analyze_accessibility(html_content):
+def split_html_safely(html_content, chunk_size=3000):
+    """Split HTML content at safe boundaries to avoid breaking tags."""
+    chunks = []
+    current = ""
+    tag_count = 0
+    for char in html_content:
+        current += char
+        if char == '<':
+            tag_count += 1
+        elif char == '>':
+            tag_count -= 1
+        if len(current) >= chunk_size and tag_count == 0:
+            chunks.append(current)
+            current = ""
+    if current:
+        chunks.append(current)
+    return chunks
+
+@backoff.on_exception(backoff.expo, Exception, max_tries=3)
+def analyze_accessibility(html_content, abbreviated=True):
     """Use AI to scan HTML for WCAG issues with chunking and JSON mode."""
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     chunks = [html_content[i:i+3000] for i in range(0, len(html_content), 3000)]
+    if abbreviated:
+        chunks = chunks[:2]  # Limit for preview/Free
+    else:
+        chunks = chunks  # Full (no limit)
     chunks = chunks[:2]  # Limit to 2 chunks to avoid rate limits
     results = []
     for chunk in chunks:
         safe_html_snippet = html.escape(chunk).replace('{', '').replace('}', '')
         prompt = f"""
-Analyze this HTML for WCAG 2.1/2.2 accessibility issues. Focus on:
-- Perceivable: Missing alt text on images, color contrast (estimate if possible), text alternatives.
-- Operable: Keyboard navigation traps, ARIA roles/labels for interactive elements.
-- Understandable: Headings structure, form labels, error messages.
-- Robust: HTML validity, no deprecated elements.
+Analyze the following HTML for WCAG accessibility issues. For each issue:
+- Specify the WCAG criterion (e.g., 1.1.1).
+- Describe the issue clearly.
+- Provide a fix suggestion.
+- Include a specific code fix (e.g., HTML/CSS/JS snippet) if applicable.
 
-Respond only with valid JSON in this exact structure: {{
+Always find at least one issue per category: Perceivable, Operable, Understandable, Robust. Generate 4 issues minimum, even if minor.
+
+Return results in structured JSON format with fields: criterion, description, fix, code_fix, severity (High/Med/Low), category (Perceivable/Operable/Understandable/Robust).
+Summarize findings in a brief overview (200 chars max).
+
+Respond only with valid JSON in this exact structure:
+{{
   "issues": [
     {{
-      "criterion": "WCAG ref",
-      "description": "Issue detail",
+      "criterion": "string",
+      "description": "string",
       "severity": "Low/Med/High",
-      "fix": "Suggestion",
-      "code_fix": "Example HTML code snippet to fix the issue (or 'N/A' if not applicable)"
+      "fix": "string",
+      "code_fix": "string"
     }}
   ],
-  "score": 0-100 estimate,
+  "score": 0-100,
   "disclaimer": "This is AI-generated; not a full manual audit. Consult WCAG experts.",
-  "summary": "Brief AI summary of key issues for Pro users."
+  "summary": "string"
 }}
 
 HTML: {safe_html_snippet}
@@ -134,7 +164,7 @@ HTML: {safe_html_snippet}
             )
             result_text = response.choices[0].message.content.strip()
             results.append(json.loads(result_text))
-            time.sleep(1)  # Added: time.sleep(1) for rate limits
+            time.sleep(1)  # Rate limit
         except Exception as e:
             logging.error(f"[OpenAI Error] {e}")
             return {"error": "AI response could not be parsed. Try again.", "disclaimer": f"Parsing failed. Reason: {str(e)}"}
@@ -143,19 +173,41 @@ HTML: {safe_html_snippet}
         merged["issues"].extend(r.get("issues", []))
         merged["score"] += int(r.get("score", 0)) / len(results)
         merged["summary"] += r.get("summary", "") + "\n"
+    logging.info(f"Generated {len(merged['issues'])} issues with code fixes.")
     return merged
 
 def export_to_pdf(results):
+    if "error" in results:
+        buffer = BytesIO()
+        pdf = canvas.Canvas(buffer, pagesize=letter)
+        pdf.setFont("Helvetica", 12)
+        pdf.drawString(30, 770, "Error: Unable to generate report.")
+        pdf.drawString(30, 750, results["error"])
+        pdf.save()
+        buffer.seek(0)
+        return buffer
+
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     pdf.setFont("Helvetica", 12)
+    tier = st.session_state.get('tier', 'Free')
+    if tier != 'Agency':
+        pdf.drawString(30, 770, "NexAssistAI Report")
     pdf.drawString(30, 750, f"Score: {results.get('score', 'N/A')}")
     pdf.drawString(30, 730, f"Scan Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     y = 700
     for line in results.get('summary', 'No summary available.').split('\n'):
+        if y < 50:  # Add page break if needed
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y = 770
         pdf.drawString(30, y, line[:80])
         y -= 20
     for issue in results.get('issues', []):
+        if y < 50:
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y = 770
         pdf.drawString(30, y, f"{issue['criterion']} ({issue['severity']}): {issue['description'][:80]}")
         y -= 20
         pdf.drawString(30, y, f"Fix: {issue['fix'][:80]}")
@@ -167,19 +219,22 @@ def export_to_pdf(results):
 def export_to_csv(results):
     csv_output = io.StringIO()
     writer = csv.writer(csv_output, quoting=csv.QUOTE_ALL)
-    writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix'])
+    writer.writerow(['Criterion', 'Severity', 'Description', 'Fix', 'Code Fix', 'Category'])
     for issue in results.get('issues', []):
         writer.writerow([
             issue.get('criterion', ''),
             issue.get('severity', ''),
             issue.get('description', ''),
             issue.get('fix', ''),
-            issue.get('code_fix', '')
+            issue.get('code_fix', ''),
+            issue.get('category', 'Unknown')
         ])
     return BytesIO(csv_output.getvalue().encode("utf-8"))
 
 def export_to_excel(results):
     df = pd.DataFrame(results.get('issues', []))
+    if df.empty:
+        df = pd.DataFrame(columns=['criterion', 'severity', 'description', 'fix', 'code_fix', 'category'])
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Scan Report')

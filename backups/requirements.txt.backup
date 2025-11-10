@@ -1,4 +1,5 @@
 streamlit==1.38.0
+requests==2.32.3
 beautifulsoup4==4.12.3
 openai==1.35.0
 python-dotenv==1.0.1
@@ -6,12 +7,12 @@ stripe==7.0.0
 reportlab==4.2.2
 pandas==2.2.2
 xlsxwriter==3.2.0
-playwright==1.48.0
+playwright  # Unpinned; installs latest (1.53.0)
 redis==5.0.8
 backoff==2.2.1
-httpx==0.27.2
-pillow==10.4.0
+httpx==0.27.2  # Add this line
+daltonize==0.1.3
+Pillow==10.4.0
 requests==2.32.3
 gtts==2.5.3
-dbutils==3.0.3
-numpy==1.26.4
+dbutils
