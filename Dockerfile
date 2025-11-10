@@ -10,7 +10,20 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN playwright install --with-deps chromium
+
+# ✅ Install Playwright Chromium dependencies (Debian 13–compatible)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        fonts-unifont \
+        fonts-dejavu-core \
+        fonts-freefont-ttf \
+        libnss3 libnspr4 libxss1 libasound2 libatk1.0-0 \
+        libatk-bridge2.0-0 libgtk-3-0 libdrm2 libxdamage1 \
+        libxrandr2 libgbm1 libxcomposite1 libxkbcommon0 libpango-1.0-0 \
+        libpangoft2-1.0-0 libpangocairo-1.0-0 libcups2 && \
+    rm -rf /var/lib/apt/lists/* && \
+    playwright install chromium --no-deps
+
 
 # Copy app code
 COPY app.py .
