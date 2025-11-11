@@ -15,3 +15,4 @@ requests==2.32.3
 gtts==2.5.3
 dbutils==3.0.3
 numpy==1.26.4
+tiktoken==0.12.0
